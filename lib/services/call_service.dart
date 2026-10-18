@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -83,14 +84,15 @@ class CallService {
     if (AppConfig.apiBaseUrl.toUpperCase().contains('YOUR')) {
       throw Exception('App server address is not set');
     }
+    try {
+      await _client.auth.refreshSession();
+    } catch (_) {}
     final token = _client.auth.currentSession?.accessToken;
-    if (token == null) {
-      throw const FormatException(
-        'No access token available. Please sign in again.',
-      );
+    if (token == null || token.isEmpty) {
+      throw Exception('Not signed in, please log in again');
     }
     final uri = Uri.parse('${AppConfig.apiBaseUrl}/api/calls/token');
-    final response = await http.post(
+    Future<http.Response> sendRequest() => http.post(
       uri,
       headers: {
         'Authorization': 'Bearer $token',
@@ -98,7 +100,16 @@ class CallService {
       },
       body: jsonEncode({'call_id': callId}),
     );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
+
+    late final http.Response response;
+    try {
+      response = await sendRequest();
+    } on http.ClientException {
+      response = await sendRequest();
+    } on TimeoutException {
+      response = await sendRequest();
+    }
+    if (response.statusCode != 200) {
       throw Exception(
         'Failed to fetch Agora token: ${response.statusCode} ${response.body}',
       );

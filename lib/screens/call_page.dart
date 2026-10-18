@@ -69,13 +69,35 @@ class _CallPageState extends State<CallPage> {
 
   Future<void> _connect() async {
     try {
-      final tokenData = await _calls.fetchToken(widget.callId);
-      if (!mounted) return;
       final permission = await Permission.microphone.request();
       if (!mounted) return;
       if (!permission.isGranted) {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Microphone permission required'),
+            content: const Text(
+              'Allow microphone access in settings to make a call.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () async {
+                  Navigator.of(dialogContext).pop();
+                  await openAppSettings();
+                },
+                child: const Text('Open settings'),
+              ),
+            ],
+          ),
+        );
         throw Exception('Microphone permission is required to call.');
       }
+      final tokenData = await _calls.fetchToken(widget.callId);
+      if (!mounted) return;
       final appId = tokenData['app_id']?.toString();
       final token = tokenData['token']?.toString();
       final channel = tokenData['channel']?.toString();
@@ -94,6 +116,10 @@ class _CallPageState extends State<CallPage> {
       final engine = createAgoraRtcEngine();
       _engine = engine;
       await engine.initialize(RtcEngineContext(appId: appId));
+      if (!mounted) return;
+      await engine.enableAudio();
+      await engine.setDefaultAudioRouteToSpeakerphone(true);
+      await engine.setEnableSpeakerphone(true);
       if (!mounted) return;
       engine.registerEventHandler(
         RtcEngineEventHandler(
@@ -116,10 +142,15 @@ class _CallPageState extends State<CallPage> {
           onUserOffline: (connection, remoteUid, reason) => _partnerLeft(),
           onTokenPrivilegeWillExpire: (connection, token) => _renewToken(),
           onError: (error, message) {
+            debugPrint('Agora onError: code=$error, message=$message');
             if (!mounted) return;
-            setState(() => _status = 'Agora error $error: $message');
+            setState(() {
+              _error = 'Agora error code $error: $message';
+              _status = 'Could not start call';
+            });
           },
           onConnectionStateChanged: (connection, state, reason) {
+            debugPrint('Agora connection state: $state, reason: $reason');
             if (!mounted ||
                 state != ConnectionStateType.connectionStateFailed) {
               return;
@@ -128,8 +159,6 @@ class _CallPageState extends State<CallPage> {
           },
         ),
       );
-      await engine.enableAudio();
-      if (!mounted) return;
       await engine.setChannelProfile(
         ChannelProfileType.channelProfileCommunication,
       );
@@ -150,7 +179,9 @@ class _CallPageState extends State<CallPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = e is AgoraRtcException
+            ? 'Agora error code ${e.code}: ${e.message ?? e.toString()}'
+            : e.toString().replaceFirst('Exception: ', '');
         _status = 'Could not start call';
       });
     }
@@ -268,7 +299,8 @@ class _CallPageState extends State<CallPage> {
   }
 
   Future<void> _report() async {
-    if (!_partnerDetailsLoaded || (_otherUserId?.trim().isEmpty ?? true)) {
+    final otherId = _otherUserId?.trim();
+    if (!_partnerDetailsLoaded || otherId == null || otherId.isEmpty) {
       return;
     }
     final reason = await showModalBottomSheet<String>(
@@ -294,7 +326,6 @@ class _CallPageState extends State<CallPage> {
       ),
     );
     if (!mounted || reason == null) return;
-    final otherId = _otherUserId!.trim();
     try {
       await _calls.reportUser(
         reportedId: otherId,
@@ -309,10 +340,10 @@ class _CallPageState extends State<CallPage> {
   }
 
   Future<void> _block() async {
-    if (!_partnerDetailsLoaded || (_otherUserId?.trim().isEmpty ?? true)) {
+    final otherId = _otherUserId?.trim();
+    if (!_partnerDetailsLoaded || otherId == null || otherId.isEmpty) {
       return;
     }
-    final otherId = _otherUserId!.trim();
     try {
       await _calls.blockUser(blockedId: otherId);
       if (!mounted) return;
@@ -343,101 +374,107 @@ class _CallPageState extends State<CallPage> {
   }
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: false,
-    onPopInvokedWithResult: (didPop, result) {
-      if (!didPop) _finish();
-    },
-    child: Scaffold(
-      body: GlassBackground(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: GlassCard(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _partnerAvatar(),
-                  const SizedBox(height: 18),
-                  Text(
-                    _firstName(_partnerName),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _error ?? _status,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                  if (_partnerDetailsLoaded &&
-                      (_otherUserId?.trim().isEmpty ?? true)) ...[
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Report and Block are unavailable because partner details could not be loaded.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ],
-                  if (_callTopicTitle?.isNotEmpty == true ||
-                      widget.topicTitle?.isNotEmpty == true) ...[
-                    const SizedBox(height: 6),
+  Widget build(BuildContext context) {
+    final topicTitle = _callTopicTitle?.isNotEmpty == true
+        ? _callTopicTitle
+        : widget.topicTitle;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _finish();
+      },
+      child: Scaffold(
+        body: GlassBackground(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: GlassCard(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _partnerAvatar(),
+                    const SizedBox(height: 18),
                     Text(
-                      _callTopicTitle ?? widget.topicTitle!,
+                      _firstName(_partnerName),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _error ?? _status,
+                      textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.white70),
                     ),
-                  ],
-                  const SizedBox(height: 28),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      IconButton(
-                        onPressed: _toggleMute,
-                        icon: Icon(_muted ? Icons.mic_off : Icons.mic),
-                        color: Colors.white,
-                        tooltip: _muted ? 'Unmute' : 'Mute',
-                      ),
-                      IconButton(
-                        onPressed: _toggleSpeaker,
-                        icon: Icon(_speaker ? Icons.volume_up : Icons.hearing),
-                        color: Colors.white,
-                        tooltip: _speaker ? 'Speaker on' : 'Speaker off',
-                      ),
-                      IconButton(
-                        onPressed:
-                            _partnerDetailsLoaded &&
-                                (_otherUserId?.trim().isNotEmpty ?? false)
-                            ? _report
-                            : null,
-                        icon: const Icon(Icons.flag),
-                        color: Colors.white,
-                        tooltip: 'Report',
-                      ),
-                      IconButton(
-                        onPressed:
-                            _partnerDetailsLoaded &&
-                                (_otherUserId?.trim().isNotEmpty ?? false)
-                            ? _block
-                            : null,
-                        icon: const Icon(Icons.block),
-                        color: Colors.white,
-                        tooltip: 'Block',
+                    if (_partnerDetailsLoaded &&
+                        (_otherUserId?.trim().isEmpty ?? true)) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Report and Block are unavailable because partner details could not be loaded.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 12),
-                  GlassButton(label: 'End call', onPressed: () => _finish()),
-                ],
+                    if (topicTitle != null && topicTitle.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        topicTitle,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ],
+                    const SizedBox(height: 28),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        IconButton(
+                          onPressed: _toggleMute,
+                          icon: Icon(_muted ? Icons.mic_off : Icons.mic),
+                          color: Colors.white,
+                          tooltip: _muted ? 'Unmute' : 'Mute',
+                        ),
+                        IconButton(
+                          onPressed: _toggleSpeaker,
+                          icon: Icon(
+                            _speaker ? Icons.volume_up : Icons.hearing,
+                          ),
+                          color: Colors.white,
+                          tooltip: _speaker ? 'Speaker on' : 'Speaker off',
+                        ),
+                        IconButton(
+                          onPressed:
+                              _partnerDetailsLoaded &&
+                                  (_otherUserId?.trim().isNotEmpty ?? false)
+                              ? _report
+                              : null,
+                          icon: const Icon(Icons.flag),
+                          color: Colors.white,
+                          tooltip: 'Report',
+                        ),
+                        IconButton(
+                          onPressed:
+                              _partnerDetailsLoaded &&
+                                  (_otherUserId?.trim().isNotEmpty ?? false)
+                              ? _block
+                              : null,
+                          icon: const Icon(Icons.block),
+                          color: Colors.white,
+                          tooltip: 'Block',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    GlassButton(label: 'End call', onPressed: () => _finish()),
+                  ],
+                ),
               ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 
   String _firstName(String? name) {
     final trimmed = name?.trim() ?? '';

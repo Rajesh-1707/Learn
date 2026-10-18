@@ -9,8 +9,8 @@ class AppConfig {
   static const String cloudinaryUploadPreset = 'speakearn_avatars';
 
   /// The web app and its API are deployed to the same Vercel origin.
-  /// Keep the placeholder fallback for native builds until their API host is set.
+  /// Native builds use the deployed API origin.
   static String get apiBaseUrl => kIsWeb
       ? Uri.base.origin
-      : 'https://YOUR-PROJECT.vercel.app';
+      : 'https://speakearn-api.vercel.app/flutter/index.html';
 }
