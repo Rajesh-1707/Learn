@@ -15,14 +15,13 @@ class CallService {
   /// RPC: join_call_queue(p_want_gender text 'any'|'male'|'female', p_topic uuid default null)
   /// Returns call_id or null when the current user is waiting.
   Future<String?> joinQueue(String wantGender, String? topicId) async {
-    final result = await _client.rpc(
+    final data = await _client.rpc(
       'join_call_queue',
       params: {
         'p_want_gender': wantGender,
         'p_topic': topicId != null && topicId.isNotEmpty ? topicId : null,
       },
     );
-    final data = result.data;
     if (data is String && data.isNotEmpty) return data;
     if (data == null) return null;
     if (data is! Map) return null;
@@ -38,8 +37,7 @@ class CallService {
 
   /// RPC: current_call() returns 0 or 1 row.
   Future<Map<String, dynamic>?> currentCall() async {
-    final result = await _client.rpc('current_call');
-    final data = result.data;
+    final data = await _client.rpc('current_call');
     if (data == null) return null;
     final row = data is List ? (data.isEmpty ? null : data[0]) : data;
     if (row == null) return null;
@@ -59,8 +57,7 @@ class CallService {
   /// RPC: charge_call(p_call) returns 'free' | 'already' | 'too_early' | 'charged'.
   /// Raises 'insufficient balance'.
   Future<String> chargeCall(String callId) async {
-    final result = await _client.rpc('charge_call', params: {'p_call': callId});
-    final data = result.data;
+    final data = await _client.rpc('charge_call', params: {'p_call': callId});
     if (data is String) return data;
     if (data is Map) {
       final v = data['status'] ?? data['result'];
@@ -71,8 +68,7 @@ class CallService {
 
   /// RPC: call_fee_paise() returns fee in paise.
   Future<int> fee() async {
-    final result = await _client.rpc('call_fee_paise');
-    final data = result.data;
+    final data = await _client.rpc('call_fee_paise');
     if (data is num) return data.toInt();
     if (data is int) return data;
     if (data is Map) {
@@ -133,17 +129,13 @@ class CallService {
   }
 
   /// Insert a block into public.blocks (reporter is current user).
-  Future<void> blockUser({
-    required String blockedId,
-    required String callId,
-  }) async {
+  Future<void> blockUser({required String blockedId}) async {
     final user = _client.auth.currentUser;
     if (user == null) throw const AuthException('Not signed in.');
-    await _client.from('blocks').insert({
+    await _client.from('blocks').upsert({
       'blocker_id': user.id,
       'blocked_id': blockedId,
-      'call_id': callId,
-    });
+    }, onConflict: 'blocker_id,blocked_id');
   }
 
   static String friendlyInsufficientBalance() =>

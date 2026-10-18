@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/material.dart';
@@ -111,10 +111,21 @@ class _CallPageState extends State<CallPage> {
               _status = 'Connected';
             });
             _calls.markConnected(widget.callId).catchError((_) {});
-            _chargeTimer = Timer(const Duration(seconds: 25), _charge);
+            _chargeTimer = Timer(const Duration(seconds: 30), _charge);
           },
           onUserOffline: (connection, remoteUid, reason) => _partnerLeft(),
           onTokenPrivilegeWillExpire: (connection, token) => _renewToken(),
+          onError: (error, message) {
+            if (!mounted) return;
+            setState(() => _status = 'Agora error $error: $message');
+          },
+          onConnectionStateChanged: (connection, state, reason) {
+            if (!mounted ||
+                state != ConnectionStateType.connectionStateFailed) {
+              return;
+            }
+            setState(() => _status = 'Agora connection failed: $reason');
+          },
         ),
       );
       await engine.enableAudio();
@@ -129,7 +140,12 @@ class _CallPageState extends State<CallPage> {
         token: token,
         channelId: channel,
         uid: uid,
-        options: const ChannelMediaOptions(),
+        options: const ChannelMediaOptions(
+          clientRoleType: ClientRoleType.clientRoleBroadcaster,
+          channelProfile: ChannelProfileType.channelProfileCommunication,
+          publishMicrophoneTrack: true,
+          autoSubscribeAudio: true,
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -142,20 +158,33 @@ class _CallPageState extends State<CallPage> {
 
   Future<void> _charge() async {
     if (!mounted || !_connected || _ending) return;
-    try {
-      final result = await _calls.chargeCall(widget.callId);
-      if (!mounted) return;
-      if (result.toLowerCase().contains('insufficient balance')) {
-        await _finish(
-          showMessage: 'Your balance is low. Add money to continue calling.',
-        );
+    for (var attempt = 0; attempt < 6; attempt++) {
+      try {
+        final result = (await _calls.chargeCall(widget.callId)).toLowerCase();
+        if (!mounted || _ending) return;
+        if (result.contains('insufficient balance')) {
+          await _finish(
+            showMessage: 'Your balance is low. Add money to continue calling.',
+          );
+          return;
+        }
+        if (result == 'charged' || result == 'already' || result == 'free') {
+          return;
+        }
+        if (result != 'too_early') return;
+      } catch (e) {
+        if (!mounted) return;
+        if (e.toString().toLowerCase().contains('insufficient balance')) {
+          await _finish(
+            showMessage: 'Your balance is low. Add money to continue calling.',
+          );
+          return;
+        }
+        return;
       }
-    } catch (e) {
-      if (!mounted) return;
-      if (e.toString().toLowerCase().contains('insufficient balance')) {
-        await _finish(
-          showMessage: 'Your balance is low. Add money to continue calling.',
-        );
+      if (attempt < 5) {
+        await Future<void>.delayed(const Duration(seconds: 3));
+        if (!mounted || _ending) return;
       }
     }
   }
@@ -274,8 +303,8 @@ class _CallPageState extends State<CallPage> {
       );
       if (!mounted) return;
       await _finish(showMessage: 'Report submitted. The call has ended.');
-    } catch (_) {
-      if (mounted) await _finish(showMessage: 'The call has ended.');
+    } catch (error) {
+      if (mounted) _showActionError('Report failed', error);
     }
   }
 
@@ -285,12 +314,18 @@ class _CallPageState extends State<CallPage> {
     }
     final otherId = _otherUserId!.trim();
     try {
-      await _calls.blockUser(blockedId: otherId, callId: widget.callId);
+      await _calls.blockUser(blockedId: otherId);
       if (!mounted) return;
       await _finish(showMessage: 'User blocked. The call has ended.');
-    } catch (_) {
-      if (mounted) await _finish(showMessage: 'The call has ended.');
+    } catch (error) {
+      if (mounted) _showActionError('Block failed', error);
     }
+  }
+
+  void _showActionError(String action, Object error) {
+    final detail = error.toString().replaceFirst('Exception: ', '');
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('$action: $detail')));
   }
 
   @override

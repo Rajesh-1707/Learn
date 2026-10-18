@@ -46,6 +46,13 @@ class _TalkPageState extends State<TalkPage> {
   }
 
   Future<void> _refresh() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _feeLoaded = false;
+        _error = null;
+      });
+    }
     try {
       final results = await Future.wait([
         _calls.fee(),
@@ -162,6 +169,11 @@ class _TalkPageState extends State<TalkPage> {
   Widget _choice(String gender, String label, String price) {
     final selected = _gender == gender;
     final disabled = gender != 'any' && _paidDisabled;
+    final priceLabel = disabled
+        ? (_feeLoaded && _balancePaise < _feePaise
+              ? 'Insufficient balance'
+              : 'Unavailable')
+        : price;
     return Expanded(
       child: InkWell(
         onTap: disabled ? null : () => setState(() => _gender = gender),
@@ -184,7 +196,7 @@ class _TalkPageState extends State<TalkPage> {
               ),
               const SizedBox(height: 4),
               Text(
-                disabled ? 'Insufficient balance' : price,
+                priceLabel,
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: disabled ? Colors.white54 : Colors.white70,
@@ -244,6 +256,8 @@ class _TalkPageState extends State<TalkPage> {
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.orangeAccent),
                     ),
+                    const SizedBox(height: 12),
+                    GlassButton(label: 'Retry', onPressed: _refresh),
                   ],
                   const SizedBox(height: 20),
                   if (_rejoinCallId != null)
