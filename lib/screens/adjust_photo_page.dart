@@ -1,12 +1,13 @@
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../services/avatar_service.dart';
 import '../widgets/glass.dart';
 
 /// Adjust-photo screen (built-ins only): circular preview with
 /// pinch-zoom, rotate button, Use photo / Retake.
 class AdjustPhotoPage extends StatefulWidget {
-  final File initialFile;
+  final XFile initialFile;
   const AdjustPhotoPage({super.key, required this.initialFile});
 
   @override
@@ -14,7 +15,8 @@ class AdjustPhotoPage extends StatefulWidget {
 }
 
 class _AdjustState extends State<AdjustPhotoPage> {
-  late File _file;
+  late XFile _file;
+  late Future<Uint8List> _imageBytes;
   int _v = 0;
   bool _rot = false;
 
@@ -22,6 +24,7 @@ class _AdjustState extends State<AdjustPhotoPage> {
   void initState() {
     super.initState();
     _file = widget.initialFile;
+    _imageBytes = _file.readAsBytes();
   }
 
   void _msg(String m) {
@@ -37,6 +40,7 @@ class _AdjustState extends State<AdjustPhotoPage> {
       if (!mounted) return;
       setState(() {
         _file = r;
+        _imageBytes = r.readAsBytes();
         _v++;
       });
     } catch (e) {
@@ -56,17 +60,29 @@ class _AdjustState extends State<AdjustPhotoPage> {
         child: InteractiveViewer(
           minScale: 1.0,
           maxScale: 4.0,
-          child: Image.file(
-            _file,
-            key: ValueKey(_v),
-            width: 240,
-            height: 240,
-            fit: BoxFit.cover,
-            errorBuilder: (c, e, s) => const Icon(
-              Icons.broken_image,
-              color: Colors.white,
-              size: 48,
-            ),
+          child: FutureBuilder<Uint8List>(
+            future: _imageBytes,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return const Icon(
+                  Icons.broken_image,
+                  color: Colors.white,
+                  size: 48,
+                );
+              }
+              if (!snapshot.hasData) {
+                return const Center(
+                  child: CircularProgressIndicator(color: Colors.white70),
+                );
+              }
+              return Image.memory(
+                snapshot.data!,
+                key: ValueKey(_v),
+                width: 240,
+                height: 240,
+                fit: BoxFit.cover,
+              );
+            },
           ),
         ),
       ),

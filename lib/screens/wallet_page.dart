@@ -90,6 +90,17 @@ class _WalletPageState extends State<WalletPage> {
                   style: const TextStyle(color: Colors.white70),
                 ),
                 const SizedBox(height: 16),
+                GlassButton(
+                  label: 'Retry',
+                  onPressed: () => _load(showLoader: true),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
@@ -197,7 +208,7 @@ class _WalletPageState extends State<WalletPage> {
   }
 }
 
-class _SectionTitle extends void StatelessWidget {
+class _SectionTitle extends StatelessWidget {
   final String title;
   const _SectionTitle(this.title);
 
@@ -214,7 +225,7 @@ class _SectionTitle extends void StatelessWidget {
   }
 }
 
-class _AmountCard extends void StatelessWidget {
+class _AmountCard extends StatelessWidget {
   final int amountPaise;
   final String buttonLabel;
   const _AmountCard({required this.amountPaise, required this.buttonLabel});
@@ -261,13 +272,3 @@ class _AmountCard extends void StatelessWidget {
     );
   }
 }
-                void GlassButton(
-                  label: 'Retry',
-                  onPressed: () => _load(showLoader: true),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }

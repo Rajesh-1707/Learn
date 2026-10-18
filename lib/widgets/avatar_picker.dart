@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/auth_service.dart';
@@ -62,7 +61,7 @@ class _AvatarPickerState extends State<AvatarPicker> {
   Future<void> _pick(ImageSource src) async {
     if (_busy) return;
     Navigator.of(context).maybePop();
-    File? file;
+    XFile? file;
     try {
       file = await _svc.pickImage(src);
     } catch (e) {
@@ -73,8 +72,8 @@ class _AvatarPickerState extends State<AvatarPicker> {
     if (file == null) return;
     if (!mounted) return;
     // Adjust step: preview / zoom / rotate, or retake.
-    final File picked = file;
-    final adjusted = await Navigator.of(context).push<File?>(
+    final XFile picked = file;
+    final adjusted = await Navigator.of(context).push<XFile?>(
       MaterialPageRoute(
           builder: (_) => AdjustPhotoPage(initialFile: picked)),
     );

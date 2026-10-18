@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:dio/dio.dart' as dio_pkg;
 import 'package:image/image.dart' as imglib;
 import 'package:image_picker/image_picker.dart';
@@ -23,7 +23,7 @@ class AvatarService {
     'webp',
   ];
 
-  Future<File?> pickImage(ImageSource source) async {
+  Future<XFile?> pickImage(ImageSource source) async {
     final XFile? x = await _picker.pickImage(
       source: source,
       maxWidth: 1024,
@@ -31,14 +31,13 @@ class AvatarService {
       imageQuality: 80,
     );
     if (x == null) return null;
-    final File file = File(x.path);
-    _validate(file);
-    return file;
+    await _validate(x);
+    return x;
   }
 
   /// Rotates the image 90° clockwise (used by the Adjust screen).
   /// Returns a new temp file; never modifies the original.
-  static Future<File> rotate90(File file) async {
+  static Future<XFile> rotate90(XFile file) async {
     final bytes = await file.readAsBytes();
     final decoded = imglib.decodeImage(bytes);
     if (decoded == null) {
@@ -46,35 +45,34 @@ class AvatarService {
           'Could not read that photo. Please choose a JPG, PNG or WEBP photo.');
     }
     final rotated = imglib.copyRotate(decoded, angle: 90);
-    final out = imglib.encodeJpg(rotated, quality: 85);
-    final dir = Directory.systemTemp;
-    final outFile = File(
-        '${dir.path}/avatar_rot_${DateTime.now().millisecondsSinceEpoch}.jpg');
-    await outFile.writeAsBytes(out, flush: true);
-    _validateStatic(outFile);
+    final out = Uint8List.fromList(imglib.encodeJpg(rotated, quality: 85));
+    final outFile = XFile.fromData(
+      out,
+      name: 'avatar_rot_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      mimeType: 'image/jpeg',
+    );
+    await _validate(outFile);
     return outFile;
   }
 
   /// Shared validation used by the widget before uploading.
-  static void validateFile(File file) => _validateStatic(file);
+  static Future<void> validateFile(XFile file) => _validate(file);
 
-  static void _validateStatic(File file) {
-    final ext = file.path.split('.').last.toLowerCase();
+  static Future<void> _validate(XFile file) async {
+    final ext = file.name.split('.').last.toLowerCase();
     if (!allowedExts.contains(ext)) {
       throw Exception(
           'That file is not a supported image. Please choose a JPG, PNG or WEBP photo.');
     }
-    final size = file.lengthSync();
+    final size = await file.length();
     if (size > maxBytes) {
       throw Exception(
           'That photo is too large (over 5 MB). Please choose a smaller one.');
     }
   }
 
-  void _validate(File file) => _validateStatic(file);
-
-  Future<String> uploadAvatar(File file) async {
-    _validate(file);
+  Future<String> uploadAvatar(XFile file) async {
+    await _validate(file);
     // Direct unsigned upload (no cloudinary_public: it converts
     // Cloudinary 401s into a bare DioException with no message).
     final url =
@@ -86,7 +84,10 @@ class AvatarService {
         data: dio_pkg.FormData.fromMap({
           'upload_preset': AppConfig.cloudinaryUploadPreset,
           'folder': 'avatars',
-          'file': await dio_pkg.MultipartFile.fromFile(file.path),
+          'file': dio_pkg.MultipartFile.fromBytes(
+            await file.readAsBytes(),
+            filename: file.name,
+          ),
         }),
       );
       final data = res.data;
@@ -135,7 +136,7 @@ class AvatarService {
   }
 
   /// Convenience: validate -> upload -> save, returns the new URL.
-  Future<String> uploadAndSave(File file) async {
+  Future<String> uploadAndSave(XFile file) async {
     final url = await uploadAvatar(file);
     await saveAvatarUrl(url);
     return url;
