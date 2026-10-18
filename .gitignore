@@ -3,6 +3,7 @@
 !.env.local.example
 node_modules/
 .next/
+public/flutter/
 .npm-cache/
 .next-swc-cache/
 *.class
