@@ -12,5 +12,5 @@ class AppConfig {
   /// Native builds use the deployed API origin.
   static String get apiBaseUrl => kIsWeb
       ? Uri.base.origin
-      : 'https://speakearn-api.vercel.app/flutter/index.html';
+      : 'https://speakearn-api.vercel.app';
 }
