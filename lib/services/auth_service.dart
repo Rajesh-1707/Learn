@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../config/app_config.dart';
+
 /// All Supabase auth + profile calls live here.
 /// Screens must use this class and never call Supabase directly.
 class AuthService {
@@ -38,7 +40,10 @@ class AuthService {
 
   /// Step 1 of code-based reset: sends the 6-digit recovery code.
   Future<void> sendResetCode(String email) {
-    return _client.auth.resetPasswordForEmail(email.trim());
+    return _client.auth.resetPasswordForEmail(
+      email.trim(),
+      redirectTo: AppConfig.passwordResetRedirectUrl,
+    );
   }
 
   /// Steps 2-3: verify the code, set the new password, then sign out

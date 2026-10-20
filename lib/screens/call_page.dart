@@ -68,6 +68,7 @@ class _CallPageState extends State<CallPage> {
   }
 
   Future<void> _connect() async {
+    var step = 'requesting microphone access';
     try {
       final permission = await Permission.microphone.request();
       if (!mounted) return;
@@ -96,6 +97,7 @@ class _CallPageState extends State<CallPage> {
         );
         throw Exception('Microphone permission is required to call.');
       }
+      step = 'requesting call credentials';
       final tokenData = await _calls.fetchToken(widget.callId);
       if (!mounted) return;
       final appId = tokenData['app_id']?.toString();
@@ -113,11 +115,19 @@ class _CallPageState extends State<CallPage> {
           'The call server returned incomplete Agora credentials.',
         );
       }
+      if (!RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(appId)) {
+        throw const FormatException(
+          'The call server returned an invalid Agora App ID.',
+        );
+      }
       final engine = createAgoraRtcEngine();
       _engine = engine;
+      step = 'initializing Agora';
       await engine.initialize(RtcEngineContext(appId: appId));
       if (!mounted) return;
+      step = 'enabling audio';
       await engine.enableAudio();
+      step = 'setting audio route';
       await engine.setDefaultAudioRouteToSpeakerphone(true);
       await engine.setEnableSpeakerphone(true);
       if (!mounted) return;
@@ -159,12 +169,14 @@ class _CallPageState extends State<CallPage> {
           },
         ),
       );
+      step = 'configuring the call';
       await engine.setChannelProfile(
         ChannelProfileType.channelProfileCommunication,
       );
       if (!mounted) return;
       await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
       if (!mounted) return;
+      step = 'joining the call';
       await engine.joinChannel(
         token: token,
         channelId: channel,
@@ -179,9 +191,15 @@ class _CallPageState extends State<CallPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e is AgoraRtcException
-            ? 'Agora error code ${e.code}: ${e.message ?? e.toString()}'
-            : e.toString().replaceFirst('Exception: ', '');
+        if (e is AgoraRtcException) {
+          final hint = e.code == -3 && step == 'initializing Agora'
+              ? ' Check that the Agora App ID is active and matches the app certificate configured on the call server.'
+              : '';
+          _error =
+              'Agora error code ${e.code} while $step: ${e.message ?? e.toString()}$hint';
+        } else {
+          _error = e.toString().replaceFirst('Exception: ', '');
+        }
         _status = 'Could not start call';
       });
     }

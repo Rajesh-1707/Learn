@@ -8,6 +8,10 @@ class AppConfig {
   static const String cloudinaryCloudName = 'o8kq8ldb';
   static const String cloudinaryUploadPreset = 'speakearn_avatars';
 
+  /// Supabase Auth must allow this URL in its redirect URL list.
+  static const String passwordResetRedirectUrl =
+      'https://speakearn-api.vercel.app/flutter/index.html';
+
   /// The web app and its API are deployed to the same Vercel origin.
   /// Native builds use the deployed API origin.
   static String get apiBaseUrl => kIsWeb

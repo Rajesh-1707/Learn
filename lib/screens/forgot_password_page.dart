@@ -70,7 +70,7 @@ catch(err){_m(AuthService.friendlyMessage(err));if(mounted)setState(()=>_busy=fa
                   const SizedBox(height: 8),
                   Text(
                     _sent
-                        ? 'Enter the code sent to ${_e.text.trim()} and a new password.'
+                        ? 'Enter the 6-digit code from the email sent to ${_e.text.trim()} and choose a new password. The email link returns to SpeakEarn.'
                         : 'Enter your email to get a 6-digit code.',
                     style: const TextStyle(color: Colors.white70),
                   ),
@@ -139,6 +139,12 @@ catch(err){_m(AuthService.friendlyMessage(err));if(mounted)setState(()=>_busy=fa
                         _cd > 0 ? 'Resend code in $_cd s' : 'Resend code',
                         style: const TextStyle(color: Colors.white70),
                       ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'If your email contains only a link, open it to return to SpeakEarn, or ask support to enable the 6-digit code in the password reset email template.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white54, fontSize: 12),
                     ),
                   ],
                 ],
