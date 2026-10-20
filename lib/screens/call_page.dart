@@ -34,7 +34,7 @@ class _CallPageState extends State<CallPage> {
   bool _connected = false;
   bool _ending = false;
   bool _muted = false;
-  bool _speaker = true;
+  bool _speaker = false;
   String _status = 'Connecting securely...';
   String? _error;
   String? _otherUserId;
@@ -128,14 +128,6 @@ class _CallPageState extends State<CallPage> {
       if (!mounted) return;
       step = 'enabling audio';
       await engine.enableAudio();
-      // Agora only supports explicit speaker routing on Android and iOS.
-      // Browsers choose the output device themselves; calling these APIs on
-      // web throws AgoraRtcException(-3) and prevents the call from joining.
-      if (!kIsWeb) {
-        step = 'setting audio route';
-        await engine.setDefaultAudioRouteToSpeakerphone(true);
-        await engine.setEnableSpeakerphone(true);
-      }
       if (!mounted) return;
       engine.registerEventHandler(
         RtcEngineEventHandler(
@@ -144,6 +136,9 @@ class _CallPageState extends State<CallPage> {
             setState(() {
               _status = 'Waiting for your partner...';
             });
+            // Routing is optional and only supported on Android/iOS. Apply it
+            // after joining, and never let a device routing failure block RTC.
+            if (!kIsWeb) _setSpeakerRoute(engine, true);
           },
           onUserJoined: (connection, remoteUid, elapsed) {
             if (!mounted || _connected) return;
@@ -322,12 +317,23 @@ class _CallPageState extends State<CallPage> {
   Future<void> _toggleSpeaker() async {
     if (kIsWeb) return;
     final next = !_speaker;
+    await _setSpeakerRoute(_engine, next, reportError: true);
+  }
+
+  Future<void> _setSpeakerRoute(
+    RtcEngine? engine,
+    bool enabled, {
+    bool reportError = false,
+  }) async {
     try {
-      await _engine?.setEnableSpeakerphone(next);
+      await engine?.setEnableSpeakerphone(enabled);
       if (!mounted) return;
-      setState(() => _speaker = next);
+      setState(() => _speaker = enabled);
     } catch (error) {
-      if (mounted) _showActionError('Speaker control failed', error);
+      debugPrint('Agora speaker routing unavailable: $error');
+      if (reportError && mounted) {
+        _showActionError('Speaker control failed', error);
+      }
     }
   }
 
