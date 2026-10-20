@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -127,9 +128,14 @@ class _CallPageState extends State<CallPage> {
       if (!mounted) return;
       step = 'enabling audio';
       await engine.enableAudio();
-      step = 'setting audio route';
-      await engine.setDefaultAudioRouteToSpeakerphone(true);
-      await engine.setEnableSpeakerphone(true);
+      // Agora only supports explicit speaker routing on Android and iOS.
+      // Browsers choose the output device themselves; calling these APIs on
+      // web throws AgoraRtcException(-3) and prevents the call from joining.
+      if (!kIsWeb) {
+        step = 'setting audio route';
+        await engine.setDefaultAudioRouteToSpeakerphone(true);
+        await engine.setEnableSpeakerphone(true);
+      }
       if (!mounted) return;
       engine.registerEventHandler(
         RtcEngineEventHandler(
@@ -304,16 +310,25 @@ class _CallPageState extends State<CallPage> {
 
   Future<void> _toggleMute() async {
     final next = !_muted;
-    await _engine?.muteLocalAudioStream(next);
-    if (!mounted) return;
-    setState(() => _muted = next);
+    try {
+      await _engine?.muteLocalAudioStream(next);
+      if (!mounted) return;
+      setState(() => _muted = next);
+    } catch (error) {
+      if (mounted) _showActionError('Microphone control failed', error);
+    }
   }
 
   Future<void> _toggleSpeaker() async {
+    if (kIsWeb) return;
     final next = !_speaker;
-    await _engine?.setEnableSpeakerphone(next);
-    if (!mounted) return;
-    setState(() => _speaker = next);
+    try {
+      await _engine?.setEnableSpeakerphone(next);
+      if (!mounted) return;
+      setState(() => _speaker = next);
+    } catch (error) {
+      if (mounted) _showActionError('Speaker control failed', error);
+    }
   }
 
   Future<void> _report() async {
@@ -452,14 +467,15 @@ class _CallPageState extends State<CallPage> {
                           color: Colors.white,
                           tooltip: _muted ? 'Unmute' : 'Mute',
                         ),
-                        IconButton(
-                          onPressed: _toggleSpeaker,
-                          icon: Icon(
-                            _speaker ? Icons.volume_up : Icons.hearing,
+                        if (!kIsWeb)
+                          IconButton(
+                            onPressed: _toggleSpeaker,
+                            icon: Icon(
+                              _speaker ? Icons.volume_up : Icons.hearing,
+                            ),
+                            color: Colors.white,
+                            tooltip: _speaker ? 'Speaker on' : 'Speaker off',
                           ),
-                          color: Colors.white,
-                          tooltip: _speaker ? 'Speaker on' : 'Speaker off',
-                        ),
                         IconButton(
                           onPressed:
                               _partnerDetailsLoaded &&
