@@ -18,4 +18,30 @@ class OwnerService {
         : data;
     return Map<String, dynamic>.from(row as Map);
   }
+
+  Future<List<Map<String, dynamic>>> listUsers({
+    String search = '',
+    int limit = 30,
+    int offset = 0,
+  }) async {
+    final data = await _client.rpc(
+      'owner_list_users',
+      params: {'p_search': search, 'p_limit': limit, 'p_offset': offset},
+    );
+    return (data as List)
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList();
+  }
+
+  Future<void> setGenderVerified(String userId, bool verified) async {
+    await _client.rpc(
+      'owner_set_gender_verified',
+      params: {'p_user_id': userId, 'p_verified': verified},
+    );
+  }
+
+  Future<int> ownerTodayCollected() async {
+    final value = await _client.rpc('owner_today_collected_paise');
+    return (value as num?)?.toInt() ?? 0;
+  }
 }

@@ -251,6 +251,17 @@ class _WalletPageState extends State<WalletPage> {
             buttonLabel: 'Withdraw',
             helperText: 'Coming soon',
           ),
+          const SizedBox(height: 10),
+          GlassCard(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            child: Column(
+              children: [
+                _walletSummary('Pending today', _wallet?.pendingPaise ?? 0),
+                const Divider(color: Colors.white24),
+                _walletSummary('Available', _wallet?.earningsPaise ?? 0),
+              ],
+            ),
+          ),
           const SizedBox(height: 24),
           const _SectionTitle('History'),
           const SizedBox(height: 12),
@@ -340,6 +351,23 @@ class _WalletPageState extends State<WalletPage> {
       ),
     );
   }
+
+  Widget _walletSummary(String label, int amount) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 5),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white70)),
+        Text(
+          formatRupees(amount),
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _SectionTitle extends StatelessWidget {

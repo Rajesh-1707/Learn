@@ -1,5 +1,9 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
 import '../config/app_config.dart';
 
 /// All Supabase auth + profile calls live here.
@@ -8,7 +12,7 @@ class AuthService {
   final SupabaseClient _client;
 
   AuthService([SupabaseClient? client])
-      : _client = client ?? Supabase.instance.client;
+    : _client = client ?? Supabase.instance.client;
 
   Session? get currentSession => _client.auth.currentSession;
 
@@ -20,10 +24,7 @@ class AuthService {
     required String email,
     required String password,
   }) {
-    return _client.auth.signUp(
-      email: email.trim(),
-      password: password,
-    );
+    return _client.auth.signUp(email: email.trim(), password: password);
   }
 
   Future<AuthResponse> signIn({
@@ -38,32 +39,76 @@ class AuthService {
 
   Future<void> signOut() => _client.auth.signOut();
 
-  /// Step 1 of code-based reset: sends the 6-digit recovery code.
-  Future<void> sendResetCode(String email) {
+  Future<void> sendPasswordResetEmail(String email) {
     return _client.auth.resetPasswordForEmail(
       email.trim(),
       redirectTo: AppConfig.passwordResetRedirectUrl,
     );
   }
 
-  /// Steps 2-3: verify the code, set the new password, then sign out
-  /// so the user logs in fresh with the new password.
-  Future<void> verifyResetCodeAndSetPassword({
+  Future<void> resetPasswordWithCredential({
     required String email,
-    required String code,
     required String newPassword,
+    required String credential,
+    required bool useDob,
   }) async {
-    final trimmedEmail = email.trim();
-    final trimmedCode = code.trim();
-    await _client.auth.verifyOTP(
-      type: OtpType.recovery,
-      email: trimmedEmail,
-      token: trimmedCode,
-    );
-    await _client.auth.updateUser(
-      UserAttributes(password: newPassword),
-    );
-    await _client.auth.signOut();
+    final response = await http
+        .post(
+          Uri.parse('${AppConfig.apiBaseUrl}/api/auth/reset-with-dob'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'email': email.trim(),
+            'new_password': newPassword,
+            if (useDob) 'dob': credential else 'recovery_code': credential,
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    final decoded = jsonDecode(response.body);
+    if (response.statusCode != 200 || decoded is! Map) {
+      final message = decoded is Map && decoded['error'] is String
+          ? decoded['error'] as String
+          : 'Details do not match';
+      throw Exception(message);
+    }
+  }
+
+  Future<void> saveRecoveryCode(String code) async {
+    final token = _client.auth.currentSession?.accessToken;
+    if (token == null) {
+      throw const AuthException('Not signed in. Please log in again.');
+    }
+    final response = await http
+        .post(
+          Uri.parse('${AppConfig.apiBaseUrl}/api/auth/set-recovery-code'),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'recovery_code': code}),
+        )
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) {
+      throw Exception('Could not save your recovery code. Please try again.');
+    }
+  }
+
+  Future<void> updatePassword(String password) async {
+    await _client.auth.updateUser(UserAttributes(password: password));
+    final token = _client.auth.currentSession?.accessToken;
+    if (token == null) {
+      throw const AuthException(
+        'Your session expired. Please request a new reset email.',
+      );
+    }
+    final response = await http
+        .post(
+          Uri.parse('${AppConfig.apiBaseUrl}/api/auth/mark-password-reset'),
+          headers: {'Authorization': 'Bearer $token'},
+        )
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) {
+      throw Exception('Could not complete password reset. Please try again.');
+    }
   }
 
   Future<Map<String, dynamic>?> getMyProfile() async {
@@ -71,7 +116,9 @@ class AuthService {
     if (user == null) return null;
     final row = await _client
         .from('profiles')
-        .select('id, full_name, gender, native_language, avatar_url, role')
+        .select(
+          'id, full_name, gender, native_language, avatar_url, role, dob, city, state',
+        )
         .eq('id', user.id)
         .maybeSingle();
     if (row == null) return null;
@@ -82,16 +129,25 @@ class AuthService {
     required String fullName,
     required String gender,
     required String nativeLanguage,
+    required DateTime dob,
+    required String city,
+    required String state,
   }) async {
     final user = _client.auth.currentUser;
     if (user == null) {
       throw const AuthException('Not signed in. Please log in again.');
     }
-    await _client.from('profiles').update({
-      'full_name': fullName.trim(),
-      'gender': gender,
-      'native_language': nativeLanguage,
-    }).eq('id', user.id);
+    await _client
+        .from('profiles')
+        .update({
+          'full_name': fullName.trim(),
+          'gender': gender,
+          'native_language': nativeLanguage,
+          'dob': dob.toIso8601String().split('T').first,
+          'city': city.trim(),
+          'state': state,
+        })
+        .eq('id', user.id);
   }
 
   Future<void> updateNativeLanguage(String language) async {
@@ -99,9 +155,10 @@ class AuthService {
     if (user == null) {
       throw const AuthException('Not signed in. Please log in again.');
     }
-    await _client.from('profiles').update(
-      {'native_language': language.trim()},
-    ).eq('id', user.id);
+    await _client
+        .from('profiles')
+        .update({'native_language': language.trim()})
+        .eq('id', user.id);
   }
 
   /// A profile counts as complete when these three are non-empty.
@@ -110,7 +167,15 @@ class AuthService {
     final name = (profile['full_name'] as String?)?.trim() ?? '';
     final gender = (profile['gender'] as String?)?.trim() ?? '';
     final lang = (profile['native_language'] as String?)?.trim() ?? '';
-    return name.isNotEmpty && gender.isNotEmpty && lang.isNotEmpty;
+    final city = (profile['city'] as String?)?.trim() ?? '';
+    final state = (profile['state'] as String?)?.trim() ?? '';
+    final dob = (profile['dob'] as String?)?.trim() ?? '';
+    return name.isNotEmpty &&
+        gender.isNotEmpty &&
+        lang.isNotEmpty &&
+        city.isNotEmpty &&
+        state.isNotEmpty &&
+        dob.isNotEmpty;
   }
 
   /// Converts Supabase / network errors into friendly UI text.

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../services/auth_service.dart';
 import '../widgets/glass.dart';
 import 'home_page.dart';
 import 'login_page.dart';
 import 'profile_setup_page.dart';
+import 'password_recovery_page.dart';
 
 /// Routes: no session -> LoginPage, session + incomplete profile ->
 /// ProfileSetupPage, otherwise HomePage.
@@ -36,6 +38,9 @@ class _AuthGateState extends State<AuthGate> {
         }
         if (session == null) {
           return const LoginPage();
+        }
+        if (snapshot.data?.event == AuthChangeEvent.passwordRecovery) {
+          return const PasswordRecoveryPage();
         }
         return FutureBuilder<Map<String, dynamic>?>(
           key: ValueKey('$_profileVersion ${session.user.id}'),

@@ -55,10 +55,28 @@ class CallService {
     await _client.rpc('end_call', params: {'p_call': callId});
   }
 
-  /// RPC: charge_call(p_call) returns 'free' | 'already' | 'too_early' | 'charged'.
-  /// Raises 'insufficient balance'.
-  Future<String> chargeCall(String callId) async {
-    final data = await _client.rpc('charge_call', params: {'p_call': callId});
+  Future<String> chooseCallMedia(String callId, String media) async {
+    final value = await _client.rpc(
+      'choose_call_media',
+      params: {'p_call_id': callId, 'p_media': media},
+    );
+    return value?.toString() ?? media;
+  }
+
+  Future<String?> callMedia(String callId) async {
+    final value = await _client.rpc(
+      'get_call_media',
+      params: {'p_call_id': callId},
+    );
+    return value?.toString();
+  }
+
+  /// RPC: bill_minute(p_call_id) returns billed/already_billed/low_balance/ended.
+  Future<String> billMinute(String callId) async {
+    final data = await _client.rpc(
+      'bill_minute',
+      params: {'p_call_id': callId},
+    );
     if (data is String) return data;
     if (data is Map) {
       final v = data['status'] ?? data['result'];

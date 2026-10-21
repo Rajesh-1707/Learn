@@ -1,45 +1,143 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
+
 import '../services/auth_service.dart';
 import '../widgets/glass.dart';
 import 'login_page.dart';
+
 class ForgotPasswordPage extends StatefulWidget {
-const ForgotPasswordPage({super.key});
-@override
-State<ForgotPasswordPage> createState()=>_S();}
-class _S extends State<ForgotPasswordPage>{
-final _e=TextEditingController();
-final _c=TextEditingController();
-final _p1=TextEditingController();
-final _p2=TextEditingController();
-final _a=AuthService();
-bool _sent=false;bool _busy=false;bool _o1=true;bool _o2=true;int _cd=0;Timer? _t;
-@override
-void dispose(){_e.dispose();_c.dispose();_p1.dispose();_p2.dispose();_t?.cancel();super.dispose();}
-void _m(String m){if(!mounted)return;ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(m)));}
-Future<void> _send({bool re=false})async{
-final e=_e.text.trim();
-if(!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(e)){_m('Please enter a valid email address');return;}
-if(re&&_cd>0)return;
-setState(()=>_busy=true);
-try{await _a.sendResetCode(e);if(!mounted)return;
-setState((){_sent=true;_cd=60;});
-_t?.cancel();
-_t=Timer.periodic(const Duration(seconds:1),(t){if(!mounted){t.cancel();return;}
-if(_cd<=1){t.cancel();if(mounted)setState(()=>_cd=0);}else{if(mounted)setState(()=>_cd--);}});
-_m('Code sent. Check your email.');}
-catch(err){_m(AuthService.friendlyMessage(err));}
-finally{if(mounted)setState(()=>_busy=false);}}
-Future<void> _rst()async{
-final e=_e.text.trim();final c=_c.text.trim();
-if(c.length<6){_m('Please enter the 6-digit code');return;}
-if(_p1.text.length<8){_m('New password must be at least 8 characters');return;}
-if(_p1.text!=_p2.text){_m('Passwords do not match');return;}
-setState(()=>_busy=true);
-try{await _a.verifyResetCodeAndSetPassword(email:e,code:c,newPassword:_p1.text);
-if(!mounted)return;
-Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder:(_)=>const LoginPage(notice:'Password changed. Please log in.')),(_)=>false);}
-catch(err){_m(AuthService.friendlyMessage(err));if(mounted)setState(()=>_busy=false);}}
+  const ForgotPasswordPage({super.key});
+
+  @override
+  State<ForgotPasswordPage> createState() => _ForgotPasswordPageState();
+}
+
+class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
+  final _email = TextEditingController();
+  final _credential = TextEditingController();
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  final _auth = AuthService();
+  int _mode = 0; // Email, date of birth, recovery code.
+  bool _busy = false;
+  bool _sent = false;
+  bool _hidePassword = true;
+  bool _hideConfirm = true;
+  DateTime? _dob;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _credential.dispose();
+    _password.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  void _message(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _sendEmail() async {
+    final email = _email.text.trim();
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      _message('Please enter a valid email address');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await _auth.sendPasswordResetEmail(email);
+      if (!mounted) return;
+      setState(() => _sent = true);
+    } catch (_) {
+      if (!mounted) return;
+      // Keep the same instruction for registered and unregistered addresses.
+      setState(() => _sent = true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _resetWithDetails() async {
+    final email = _email.text.trim();
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      _message('Please enter a valid email address');
+      return;
+    }
+    if (_mode == 1 && _dob == null) {
+      _message('Please select your date of birth');
+      return;
+    }
+    if (_mode == 2 &&
+        !RegExp(r'^[A-Za-z0-9]{8}$').hasMatch(_credential.text.trim())) {
+      _message('Enter your 8-character recovery code');
+      return;
+    }
+    if (_password.text.length < 8) {
+      _message('New password must be at least 8 characters');
+      return;
+    }
+    if (_password.text != _confirm.text) {
+      _message('Passwords do not match');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final credential = _mode == 1
+          ? '${_dob!.year.toString().padLeft(4, '0')}-${_dob!.month.toString().padLeft(2, '0')}-${_dob!.day.toString().padLeft(2, '0')}'
+          : _credential.text.trim().toUpperCase();
+      await _auth.resetPasswordWithCredential(
+        email: email,
+        newPassword: _password.text,
+        credential: credential,
+        useDob: _mode == 1,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) =>
+              const LoginPage(notice: 'Password changed. Please log in.'),
+        ),
+        (_) => false,
+      );
+    } catch (error) {
+      _message(error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Widget _passwordFields() => Column(
+    children: [
+      GlassField(
+        controller: _password,
+        hint: 'New password (min 8)',
+        icon: Icons.lock,
+        obscure: _hidePassword,
+        suffixIcon: IconButton(
+          icon: Icon(
+            _hidePassword ? Icons.visibility : Icons.visibility_off,
+            color: Colors.white70,
+          ),
+          onPressed: () => setState(() => _hidePassword = !_hidePassword),
+        ),
+      ),
+      const SizedBox(height: 12),
+      GlassField(
+        controller: _confirm,
+        hint: 'Confirm new password',
+        icon: Icons.lock_outline,
+        obscure: _hideConfirm,
+        suffixIcon: IconButton(
+          icon: Icon(
+            _hideConfirm ? Icons.visibility : Icons.visibility_off,
+            color: Colors.white70,
+          ),
+          onPressed: () => setState(() => _hideConfirm = !_hideConfirm),
+        ),
+      ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +154,6 @@ catch(err){_m(AuthService.friendlyMessage(err));if(mounted)setState(()=>_busy=fa
             padding: const EdgeInsets.all(20),
             child: GlassCard(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
@@ -67,86 +164,168 @@ catch(err){_m(AuthService.friendlyMessage(err));if(mounted)setState(()=>_busy=fa
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _sent
-                        ? 'Enter the 6-digit code from the email sent to ${_e.text.trim()} and choose a new password. The email link returns to SpeakEarn.'
-                        : 'Enter your email to get a 6-digit code.',
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                  const SizedBox(height: 20),
-                  GlassField(
-                    controller: _e,
-                    hint: 'Email',
-                    icon: Icons.email,
-                    keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.done,
-                  ),
                   const SizedBox(height: 12),
-                  if (!_sent)
+                  TextField(
+                    controller: _email,
+                    keyboardType: TextInputType.emailAddress,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'Email',
+                      hintStyle: const TextStyle(color: Colors.white70),
+                      prefixIcon: const Icon(Icons.email, color: Colors.white),
+                      filled: true,
+                      fillColor: Colors.white.withValues(alpha: 0.2),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(18),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_mode == 0) ...[
+                    Text(
+                      _sent
+                          ? 'If an account uses this email, reset instructions are on the way. Open the link in the email to choose a new password.'
+                          : 'We’ll email a secure password reset link.',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                    const SizedBox(height: 16),
                     GlassButton(
-                      label: 'Send code',
+                      label: _sent
+                          ? 'Send instructions again'
+                          : 'Send reset instructions',
                       isLoading: _busy,
-                      onPressed: _busy ? null : _send,
-                    )
-                  else ...[
-                    GlassField(
-                      controller: _c,
-                      hint: '6-digit code',
-                      icon: Icons.pin,
-                      keyboardType: TextInputType.number,
+                      onPressed: _busy ? null : _sendEmail,
                     ),
-                    const SizedBox(height: 12),
-                    GlassField(
-                      controller: _p1,
-                      hint: 'New password (min 8)',
-                      icon: Icons.lock,
-                      obscure: _o1,
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _o1 ? Icons.visibility : Icons.visibility_off,
-                          color: Colors.white70,
+                  ] else ...[
+                    if (_mode == 1)
+                      InkWell(
+                        onTap: _busy
+                            ? null
+                            : () async {
+                                final now = DateTime.now();
+                                final selected = await showDatePicker(
+                                  context: context,
+                                  initialDate: DateTime(
+                                    now.year - 18,
+                                    now.month,
+                                    now.day,
+                                  ),
+                                  firstDate: DateTime(1900),
+                                  lastDate: now,
+                                );
+                                if (selected != null) {
+                                  setState(() => _dob = selected);
+                                }
+                              },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 18,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.cake, color: Colors.white),
+                              const SizedBox(width: 12),
+                              Text(
+                                _dob == null
+                                    ? 'Date of birth'
+                                    : '${_dob!.day}/${_dob!.month}/${_dob!.year}',
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ],
+                          ),
                         ),
-                        onPressed: () => setState(() => _o1 = !_o1),
+                      )
+                    else
+                      GlassField(
+                        controller: _credential,
+                        hint: '8-character recovery code',
+                        icon: Icons.key,
+                        textInputAction: TextInputAction.next,
                       ),
-                    ),
                     const SizedBox(height: 12),
-                    GlassField(
-                      controller: _p2,
-                      hint: 'Confirm new password',
-                      icon: Icons.lock_outline,
-                      obscure: _o2,
-                      textInputAction: TextInputAction.done,
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _o2 ? Icons.visibility : Icons.visibility_off,
-                          color: Colors.white70,
-                        ),
-                        onPressed: () => setState(() => _o2 = !_o2),
-                      ),
-                    ),
+                    _passwordFields(),
                     const SizedBox(height: 16),
                     GlassButton(
                       label: 'Change password',
                       isLoading: _busy,
-                      onPressed: _busy ? null : _rst,
-                    ),
-                    const SizedBox(height: 8),
-                    TextButton(
-                      onPressed:
-                          (_busy || _cd > 0) ? null : () => _send(re: true),
-                      child: Text(
-                        _cd > 0 ? 'Resend code in $_cd s' : 'Resend code',
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'If your email contains only a link, open it to return to SpeakEarn, or ask support to enable the 6-digit code in the password reset email template.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white54, fontSize: 12),
+                      onPressed: _busy ? null : _resetWithDetails,
                     ),
                   ],
+                  const SizedBox(height: 12),
+                  if (!_sent || _mode != 0)
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      children: [
+                        TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () => setState(() {
+                                  _mode = 0;
+                                  _sent = false;
+                                }),
+                          child: Text(
+                            'Email reset',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () => setState(() {
+                                  _mode = 1;
+                                  _sent = false;
+                                }),
+                          child: Text(
+                            _mode == 0
+                                ? 'Use date of birth instead'
+                                : 'Use date of birth',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () => setState(() {
+                                  _mode = 2;
+                                  _sent = false;
+                                }),
+                          child: const Text(
+                            'Use recovery code',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      children: [
+                        TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () => setState(() => _mode = 1),
+                          child: const Text(
+                            'Use date of birth',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () => setState(() => _mode = 2),
+                          child: const Text(
+                            'Use recovery code',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),

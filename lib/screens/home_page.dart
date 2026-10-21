@@ -1,7 +1,12 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
 import '../services/owner_service.dart';
+import '../services/friends_service.dart';
+import '../services/call_service.dart';
 import '../widgets/avatar_picker.dart';
 
 import '../screens/talk_page.dart';
@@ -9,7 +14,12 @@ import '../screens/talk_page.dart';
 import '../widgets/glass.dart';
 import 'learn_page.dart';
 import 'wallet_page.dart';
+import 'owner_users_page.dart';
+import 'my_rates_page.dart';
+import 'owner_pricing_page.dart';
+import 'owner_dashboard_page.dart';
 import '../utils/money.dart';
+import 'call_page.dart';
 
 class HomePage extends StatefulWidget {
   final Map<String, dynamic>? profile;
@@ -18,8 +28,13 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _H();
 }
 
-class _H extends State<HomePage> {
+class _H extends State<HomePage> with WidgetsBindingObserver {
   final _a = AuthService();
+  final _friends = FriendsService();
+  final _calls = CallService();
+  Timer? _presenceTimer;
+  Timer? _incomingTimer;
+  bool _openingIncoming = false;
   String? _avatar;
   String _lang = 'English';
   String _name = '';
@@ -38,6 +53,7 @@ class _H extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _read(widget.profile);
   }
 
@@ -45,6 +61,117 @@ class _H extends State<HomePage> {
   void didUpdateWidget(HomePage old) {
     super.didUpdateWidget(old);
     if (old.profile != widget.profile) _read(widget.profile);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startPresence();
+    } else {
+      _stopPresence();
+    }
+  }
+
+  void _startPresence() {
+    if (_role == 'owner' || _a.currentUser == null) return;
+    _friends.setPresence(true).catchError((_) {});
+    _presenceTimer ??= Timer.periodic(
+      const Duration(seconds: 25),
+      (_) => _friends.setPresence(true).catchError((_) {}),
+    );
+    _incomingTimer ??= Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _checkIncomingCall(),
+    );
+  }
+
+  Future<void> _stopPresence() async {
+    _presenceTimer?.cancel();
+    _presenceTimer = null;
+    _incomingTimer?.cancel();
+    _incomingTimer = null;
+    try {
+      await _friends.setPresence(false);
+    } catch (_) {}
+  }
+
+  Future<void> _checkIncomingCall() async {
+    if (!mounted || _openingIncoming) return;
+    try {
+      final call = await _friends.pendingCall();
+      final id = call?['call_id']?.toString();
+      if (id == null || id.isEmpty || !mounted) return;
+      _openingIncoming = true;
+      final media = call?['media_type']?.toString() ?? 'audio';
+      final canAccept =
+          media != 'video' ||
+          (!kIsWeb && defaultTargetPlatform == TargetPlatform.android);
+      final accept = await showModalBottomSheet<bool>(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (context) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: GlassCard(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Incoming friend call',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (!canAccept)
+                    const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: Text(
+                        'Video calls are currently available on Android.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Decline'),
+                        ),
+                      ),
+                      Expanded(
+                        child: GlassButton(
+                          label: 'Accept',
+                          onPressed: canAccept
+                              ? () => Navigator.pop(context, true)
+                              : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      if (accept == true && mounted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) =>
+                CallPage(callId: id, mediaType: media, isFriendCall: true),
+          ),
+        );
+      } else {
+        await _calls.endCall(id);
+      }
+    } catch (_) {
+      // The next poll retries transient RPC or network failures.
+    } finally {
+      _openingIncoming = false;
+    }
   }
 
   void _read(Map<String, dynamic>? p) {
@@ -57,6 +184,11 @@ class _H extends State<HomePage> {
     final r = (p?['role'] as String?)?.trim() ?? 'user';
     _role = r;
     if (_role == 'owner') _loadOwnerStats();
+    if (_role == 'owner') {
+      _stopPresence();
+    } else {
+      _startPresence();
+    }
   }
 
   Future<void> _loadOwnerStats() async {
@@ -90,6 +222,7 @@ class _H extends State<HomePage> {
 
   Future<void> _out() async {
     try {
+      await _stopPresence();
       await _a.signOut();
     } catch (e) {
       if (!mounted) return;
@@ -157,6 +290,13 @@ class _H extends State<HomePage> {
                   style: TextStyle(color: Colors.white54, fontSize: 12),
                 ),
                 const SizedBox(height: 20),
+                GlassButton(
+                  label: 'My rates',
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const MyRatesPage()),
+                  ),
+                ),
+                const SizedBox(height: 12),
                 if (_role == 'owner') ...[
                   const Text(
                     'Owner dashboard',
@@ -240,6 +380,20 @@ class _H extends State<HomePage> {
           const SizedBox(height: 8),
           _statRow('Wallet balances', s['wallet_balances_paise']),
           _statRow('Unpaid earnings', s['earnings_owed_paise']),
+          const SizedBox(height: 12),
+          GlassButton(
+            label: 'Users',
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const OwnerUsersPage())),
+          ),
+          const SizedBox(height: 10),
+          GlassButton(
+            label: 'Pricing',
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const OwnerPricingPage())),
+          ),
         ],
       ),
     );
@@ -273,6 +427,7 @@ class _H extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_role == 'owner') return const OwnerDashboardPage();
     final prof = {
       'full_name': _name,
       'native_language': _lang,
@@ -331,5 +486,14 @@ class _H extends State<HomePage> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _presenceTimer?.cancel();
+    _incomingTimer?.cancel();
+    _stopPresence();
+    super.dispose();
   }
 }

@@ -5,12 +5,14 @@ class WalletRow {
   final String userId;
   final int balancePaise;
   final int earningsPaise;
+  final int pendingPaise;
   final String? updatedAt;
 
   const WalletRow({
     required this.userId,
     required this.balancePaise,
     required this.earningsPaise,
+    this.pendingPaise = 0,
     this.updatedAt,
   });
 
@@ -19,6 +21,7 @@ class WalletRow {
       userId: '${json['user_id'] ?? ''}',
       balancePaise: (json['balance_paise'] as num?)?.toInt() ?? 0,
       earningsPaise: (json['earnings_paise'] as num?)?.toInt() ?? 0,
+      pendingPaise: (json['pending_paise'] as num?)?.toInt() ?? 0,
       updatedAt: json['updated_at'] as String?,
     );
   }
@@ -63,6 +66,10 @@ class TransactionRow {
         return 'Added money';
       case 'call_fee':
         return 'Call payment';
+      case 'chat_fee':
+        return 'Chat payment';
+      case 'chat_earning':
+        return 'Chat earning';
       case 'call_earning':
         return 'Call earning';
       case 'payout':
@@ -83,6 +90,10 @@ class TransactionRow {
         return Icons.add_circle_outline;
       case 'call_fee':
         return Icons.phone;
+      case 'chat_fee':
+        return Icons.chat_bubble_outline;
+      case 'chat_earning':
+        return Icons.chat;
       case 'call_earning':
         return Icons.attach_money;
       case 'payout':
@@ -104,6 +115,7 @@ class TransactionRow {
       case 'refund':
         return true;
       case 'call_fee':
+      case 'chat_fee':
       case 'payout':
       case 'ad_income':
         return false;

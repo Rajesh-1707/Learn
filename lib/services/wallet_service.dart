@@ -20,7 +20,9 @@ class WalletService {
     }
     final row = await _client
         .from('wallets')
-        .select('user_id, balance_paise, earnings_paise, updated_at')
+        .select(
+          'user_id, balance_paise, earnings_paise, pending_paise, updated_at',
+        )
         .eq('user_id', user.id)
         .maybeSingle();
     if (row == null) {

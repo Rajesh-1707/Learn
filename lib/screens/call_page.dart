@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../services/call_service.dart';
+import '../services/friends_service.dart';
+import '../utils/money.dart';
 import '../widgets/glass.dart';
 
 class CallPage extends StatefulWidget {
@@ -13,6 +15,9 @@ class CallPage extends StatefulWidget {
   final String callId;
   final String? topicId;
   final String? topicTitle;
+  final String mediaType;
+  final int ratePaise;
+  final bool isFriendCall;
 
   const CallPage({
     super.key,
@@ -20,21 +25,32 @@ class CallPage extends StatefulWidget {
     this.topicId,
     this.topicTitle,
     this.profile,
+    this.mediaType = 'audio',
+    this.ratePaise = 1000,
+    this.isFriendCall = false,
   });
 
   @override
   State<CallPage> createState() => _CallPageState();
 }
 
-class _CallPageState extends State<CallPage> {
+class _CallPageState extends State<CallPage>
+    with SingleTickerProviderStateMixin {
   final _calls = CallService();
   RtcEngine? _engine;
   Timer? _ringTimer;
   Timer? _chargeTimer;
+  Timer? _elapsedTimer;
+  int _elapsedSeconds = 0;
+  int? _remoteUid;
+  Offset _previewOffset = const Offset(16, 90);
   bool _connected = false;
   bool _ending = false;
   bool _muted = false;
   bool _speaker = false;
+  bool _camera = true;
+  bool _friendPromptShown = false;
+  bool _billing = false;
   String _status = 'Connecting securely...';
   String? _error;
   String? _otherUserId;
@@ -42,10 +58,19 @@ class _CallPageState extends State<CallPage> {
   String? _partnerAvatarUrl;
   String? _callTopicTitle;
   bool _partnerDetailsLoaded = false;
+  late final AnimationController _pulseController;
+  bool get _video => widget.mediaType == 'video';
+  bool get _videoSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  int get _spentPaise => _elapsedSeconds * widget.ratePaise ~/ 60;
 
   @override
   void initState() {
     super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
     _ringTimer = Timer(const Duration(seconds: 45), _noAnswer);
     _loadOtherUserId();
     _connect();
@@ -99,6 +124,9 @@ class _CallPageState extends State<CallPage> {
         throw Exception('Microphone permission is required to call.');
       }
       step = 'requesting call credentials';
+      if (_video && !_videoSupported) {
+        throw Exception('Video calls are currently available on Android.');
+      }
       final tokenData = await _calls.fetchToken(widget.callId);
       if (!mounted) return;
       final appId = tokenData['app_id']?.toString();
@@ -129,6 +157,14 @@ class _CallPageState extends State<CallPage> {
       step = 'enabling audio';
       await engine.enableAudio();
       if (!mounted) return;
+      if (_video) {
+        final cameraPermission = await Permission.camera.request();
+        if (!cameraPermission.isGranted) {
+          throw Exception('Camera permission is required for video calls.');
+        }
+        await engine.enableVideo();
+        await engine.startPreview();
+      }
       engine.registerEventHandler(
         RtcEngineEventHandler(
           onJoinChannelSuccess: (connection, elapsed) {
@@ -146,9 +182,23 @@ class _CallPageState extends State<CallPage> {
             setState(() {
               _connected = true;
               _status = 'Connected';
+              _remoteUid = remoteUid;
             });
             _calls.markConnected(widget.callId).catchError((_) {});
-            _chargeTimer = Timer(const Duration(seconds: 30), _charge);
+            _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+              if (!mounted) return;
+              setState(() => _elapsedSeconds++);
+              if (_elapsedSeconds >= 40 &&
+                  !_friendPromptShown &&
+                  !widget.isFriendCall) {
+                _showAddFriend();
+              }
+            });
+            _billMinute();
+            _chargeTimer = Timer.periodic(
+              const Duration(minutes: 1),
+              (_) => _billMinute(),
+            );
           },
           onUserOffline: (connection, remoteUid, reason) => _partnerLeft(),
           onTokenPrivilegeWillExpire: (connection, token) => _renewToken(),
@@ -182,11 +232,13 @@ class _CallPageState extends State<CallPage> {
         token: token,
         channelId: channel,
         uid: uid,
-        options: const ChannelMediaOptions(
+        options: ChannelMediaOptions(
           clientRoleType: ClientRoleType.clientRoleBroadcaster,
           channelProfile: ChannelProfileType.channelProfileCommunication,
           publishMicrophoneTrack: true,
+          publishCameraTrack: _video,
           autoSubscribeAudio: true,
+          autoSubscribeVideo: _video,
         ),
       );
     } catch (e) {
@@ -206,35 +258,119 @@ class _CallPageState extends State<CallPage> {
     }
   }
 
-  Future<void> _charge() async {
-    if (!mounted || !_connected || _ending) return;
-    for (var attempt = 0; attempt < 6; attempt++) {
-      try {
-        final result = (await _calls.chargeCall(widget.callId)).toLowerCase();
-        if (!mounted || _ending) return;
-        if (result.contains('insufficient balance')) {
-          await _finish(
-            showMessage: 'Your balance is low. Add money to continue calling.',
-          );
-          return;
-        }
-        if (result == 'charged' || result == 'already' || result == 'free') {
-          return;
-        }
-        if (result != 'too_early') return;
-      } catch (e) {
-        if (!mounted) return;
-        if (e.toString().toLowerCase().contains('insufficient balance')) {
-          await _finish(
-            showMessage: 'Your balance is low. Add money to continue calling.',
-          );
-          return;
-        }
-        return;
+  Future<void> _billMinute() async {
+    if (!mounted || !_connected || _ending || _billing) return;
+    _billing = true;
+    try {
+      final result = (await _calls.billMinute(widget.callId)).toLowerCase();
+      if (!mounted || _ending) return;
+      if (result == 'low_balance') {
+        await _showLowBalanceDialog();
+      } else if (result == 'ended') {
+        await _finish(showMessage: 'This call has ended.');
       }
-      if (attempt < 5) {
-        await Future<void>.delayed(const Duration(seconds: 3));
-        if (!mounted || _ending) return;
+    } catch (error) {
+      if (mounted && !_ending) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not process call payment.')),
+        );
+      }
+    } finally {
+      _billing = false;
+    }
+  }
+
+  Future<void> _showLowBalanceDialog() async {
+    if (!mounted || _ending) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF553A91),
+        title: const Text('Call ended', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'Your balance is too low for the next minute.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (mounted && !_ending) {
+      await _finish(showMessage: 'Call ended because your balance is low.');
+    }
+  }
+
+  Future<void> _showAddFriend() async {
+    _friendPromptShown = true;
+    final partnerId = _otherUserId;
+    if (partnerId == null || partnerId.isEmpty || !mounted) return;
+    final add = await showDialog<bool>(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: GlassCard(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Add as friend?',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text(
+                          'Not now',
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: GlassButton(
+                        label: 'Add',
+                        onPressed: () => Navigator.pop(context, true),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (add == true) {
+      try {
+        await FriendsService().addFromCall(
+          id: partnerId,
+          name: _partnerName ?? 'Friend',
+          avatarUrl: _partnerAvatarUrl,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Friend request sent')));
+        }
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not send friend request')),
+          );
+        }
       }
     }
   }
@@ -266,6 +402,7 @@ class _CallPageState extends State<CallPage> {
     _ending = true;
     _ringTimer?.cancel();
     _chargeTimer?.cancel();
+    _elapsedTimer?.cancel();
     try {
       await _calls.endCall(widget.callId);
     } catch (_) {}
@@ -318,6 +455,25 @@ class _CallPageState extends State<CallPage> {
     if (kIsWeb) return;
     final next = !_speaker;
     await _setSpeakerRoute(_engine, next, reportError: true);
+  }
+
+  Future<void> _toggleCamera() async {
+    final next = !_camera;
+    try {
+      await _engine?.muteLocalVideoStream(!next);
+      if (!mounted) return;
+      setState(() => _camera = next);
+    } catch (error) {
+      if (mounted) _showActionError('Camera control failed', error);
+    }
+  }
+
+  Future<void> _switchCamera() async {
+    try {
+      await _engine?.switchCamera();
+    } catch (error) {
+      if (mounted) _showActionError('Could not switch camera', error);
+    }
   }
 
   Future<void> _setSpeakerRoute(
@@ -400,8 +556,10 @@ class _CallPageState extends State<CallPage> {
 
   @override
   void dispose() {
+    _pulseController.dispose();
     _ringTimer?.cancel();
     _chargeTimer?.cancel();
+    _elapsedTimer?.cancel();
     final engine = _engine;
     _engine = null;
     if (engine != null) {
@@ -423,97 +581,256 @@ class _CallPageState extends State<CallPage> {
         if (!didPop) _finish();
       },
       child: Scaffold(
-        body: GlassBackground(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: GlassCard(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _partnerAvatar(),
-                    const SizedBox(height: 18),
-                    Text(
-                      _firstName(_partnerName),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
+        body: _video ? _videoCallBody(topicTitle) : _audioCallBody(topicTitle),
+      ),
+    );
+  }
+
+  Widget _audioCallBody(String? topicTitle) => GlassBackground(
+    child: SafeArea(
+      child: Column(
+        children: [
+          Align(alignment: Alignment.topRight, child: _callMenu()),
+          const Spacer(),
+          AnimatedBuilder(
+            animation: _pulseController,
+            builder: (context, child) => Transform.scale(
+              scale: _connected ? 1 + _pulseController.value * 0.045 : 1,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white.withValues(
+                      alpha: _connected ? 0.65 : 0.25,
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _error ?? _status,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white70),
+                    width: _connected ? 5 : 2,
+                  ),
+                  boxShadow: [
+                    if (_connected)
+                      BoxShadow(
+                        color: Colors.white.withValues(
+                          alpha: 0.15 + _pulseController.value * 0.2,
+                        ),
+                        blurRadius: 20 + _pulseController.value * 12,
+                        spreadRadius: 3 + _pulseController.value * 4,
+                      ),
+                  ],
+                ),
+                child: child,
+              ),
+            ),
+            child: _partnerAvatar(),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            _firstName(_partnerName),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 25,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          if (topicTitle != null && topicTitle.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(topicTitle, style: const TextStyle(color: Colors.white70)),
+          ],
+          const SizedBox(height: 10),
+          Text(
+            _error ?? _status,
+            style: const TextStyle(color: Colors.white70),
+          ),
+          const SizedBox(height: 22),
+          Text(
+            _elapsedLabel(),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 26,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '₹ spent ${formatRupees(_spentPaise)}',
+            style: const TextStyle(color: Colors.white70, fontSize: 16),
+          ),
+          const Spacer(),
+          _controlBar(),
+          const SizedBox(height: 24),
+        ],
+      ),
+    ),
+  );
+
+  Widget _videoCallBody(String? topicTitle) => GlassBackground(
+    child: SafeArea(
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: _connected && _remoteUid != null && _engine != null
+                ? AgoraVideoView(
+                    controller: VideoViewController.remote(
+                      rtcEngine: _engine!,
+                      canvas: VideoCanvas(uid: _remoteUid!),
+                      connection: RtcConnection(channelId: widget.callId),
                     ),
-                    if (_partnerDetailsLoaded &&
-                        (_otherUserId?.trim().isEmpty ?? true)) ...[
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Report and Block are unavailable because partner details could not be loaded.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
-                      ),
-                    ],
-                    if (topicTitle != null && topicTitle.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        topicTitle,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                    ],
-                    const SizedBox(height: 28),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  )
+                : Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        IconButton(
-                          onPressed: _toggleMute,
-                          icon: Icon(_muted ? Icons.mic_off : Icons.mic),
-                          color: Colors.white,
-                          tooltip: _muted ? 'Unmute' : 'Mute',
-                        ),
-                        if (!kIsWeb)
-                          IconButton(
-                            onPressed: _toggleSpeaker,
-                            icon: Icon(
-                              _speaker ? Icons.volume_up : Icons.hearing,
-                            ),
+                        _partnerAvatar(),
+                        const SizedBox(height: 14),
+                        Text(
+                          _firstName(_partnerName),
+                          style: const TextStyle(
                             color: Colors.white,
-                            tooltip: _speaker ? 'Speaker on' : 'Speaker off',
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
                           ),
-                        IconButton(
-                          onPressed:
-                              _partnerDetailsLoaded &&
-                                  (_otherUserId?.trim().isNotEmpty ?? false)
-                              ? _report
-                              : null,
-                          icon: const Icon(Icons.flag),
-                          color: Colors.white,
-                          tooltip: 'Report',
                         ),
-                        IconButton(
-                          onPressed:
-                              _partnerDetailsLoaded &&
-                                  (_otherUserId?.trim().isNotEmpty ?? false)
-                              ? _block
-                              : null,
-                          icon: const Icon(Icons.block),
-                          color: Colors.white,
-                          tooltip: 'Block',
+                        Text(
+                          topicTitle ?? _error ?? _status,
+                          style: const TextStyle(color: Colors.white70),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    GlassButton(label: 'End call', onPressed: () => _finish()),
-                  ],
+                  ),
+          ),
+          Positioned(top: 8, right: 8, child: _callMenu()),
+          if (_engine != null && _connected)
+            Positioned(
+              left: _previewOffset.dx,
+              top: _previewOffset.dy,
+              child: GestureDetector(
+                onPanUpdate: (d) => setState(
+                  () => _previewOffset = Offset(
+                    (_previewOffset.dx + d.delta.dx).clamp(
+                      0,
+                      MediaQuery.sizeOf(context).width - 140,
+                    ),
+                    (_previewOffset.dy + d.delta.dy).clamp(
+                      0,
+                      MediaQuery.sizeOf(context).height - 240,
+                    ),
+                  ),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: Container(
+                    width: 120,
+                    height: 170,
+                    color: Colors.black54,
+                    child: _camera
+                        ? AgoraVideoView(
+                            controller: VideoViewController(
+                              rtcEngine: _engine!,
+                              canvas: const VideoCanvas(uid: 0),
+                            ),
+                          )
+                        : const Center(
+                            child: Icon(
+                              Icons.videocam_off,
+                              color: Colors.white,
+                              size: 36,
+                            ),
+                          ),
+                  ),
                 ),
               ),
             ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 112,
+            child: Column(
+              children: [
+                Text(
+                  '${_firstName(_partnerName)}${topicTitle == null ? '' : ' · $topicTitle'}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                Text(
+                  '${_elapsedLabel()} · ${formatRupees(_spentPaise)} spent',
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ],
+            ),
           ),
-        ),
+          Positioned(left: 12, right: 12, bottom: 16, child: _controlBar()),
+        ],
       ),
-    );
+    ),
+  );
+
+  Widget _controlBar() => GlassCard(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        _control(
+          _muted ? Icons.mic_off : Icons.mic,
+          _muted ? 'Unmute' : 'Mute',
+          _toggleMute,
+        ),
+        if (!kIsWeb)
+          _control(
+            _speaker ? Icons.volume_up : Icons.hearing,
+            'Speaker',
+            _toggleSpeaker,
+          ),
+        if (_video) ...[
+          _control(
+            _camera ? Icons.videocam : Icons.videocam_off,
+            'Camera',
+            _toggleCamera,
+          ),
+          _control(Icons.flip_camera_android, 'Switch camera', _switchCamera),
+        ],
+        IconButton.filled(
+          onPressed: () => _finish(),
+          style: IconButton.styleFrom(
+            backgroundColor: Colors.redAccent,
+            foregroundColor: Colors.white,
+          ),
+          tooltip: 'End call',
+          icon: const Icon(Icons.call_end),
+        ),
+      ],
+    ),
+  );
+
+  Widget _control(IconData icon, String label, VoidCallback action) =>
+      IconButton(
+        onPressed: action,
+        tooltip: label,
+        icon: Icon(icon, color: Colors.white),
+      );
+
+  Widget _callMenu() => PopupMenuButton<String>(
+    iconColor: Colors.white,
+    color: const Color(0xFF5B3BA8),
+    onSelected: (value) => value == 'report' ? _report() : _block(),
+    itemBuilder: (_) => const [
+      PopupMenuItem(
+        value: 'report',
+        child: Text('Report user', style: TextStyle(color: Colors.white)),
+      ),
+      PopupMenuItem(
+        value: 'block',
+        child: Text('Block user', style: TextStyle(color: Colors.white)),
+      ),
+    ],
+  );
+
+  String _elapsedLabel() {
+    final minutes = _elapsedSeconds ~/ 60;
+    final seconds = _elapsedSeconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
   String _firstName(String? name) {
